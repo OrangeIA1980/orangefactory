@@ -1,0 +1,37 @@
+# Env
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.next/
+.vite/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Docker
+*.log
+
+# Uploads (archivos DXF, G-code generados localmente)
+uploads/
+storage/
+
+# Alembic
+# (las migraciones sí van al repo, no se ignoran)
