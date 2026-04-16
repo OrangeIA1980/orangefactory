@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.deps import CurrentUser
 from app.models import Proyecto, Archivo, EstadoArchivo
-from app.schemas import ArchivoOut, GeometriaOut, ValidacionOut, EditarRequest
+from app.schemas import ArchivoOut, GeometriaOut, ValidacionOut, EditarRequest, WorkspaceOut
 from app.services.dxf_service import parsear_dxf, validar_geometria, auto_reparar, detectar_jerarquia
 from app.services import vector_ops
 
@@ -140,9 +140,47 @@ async def subir_archivo(
         except Exception as e:
             archivo.estado = EstadoArchivo.ERROR.value
             archivo.problemas = {"error": str(e)}
+    elif formato in ("ai", "svg", "pdf", "eps"):
+        # Convertir a DXF con Inkscape
+        from app.services.conversion_service import convertir_a_dxf
+
+        archivo.estado = EstadoArchivo.CONVIRTIENDO.value
+        dxf_name = f"{uuid.uuid4().hex}.dxf"
+        ruta_dxf_disco = proyecto_dir / dxf_name
+
+        if convertir_a_dxf(str(ruta_disco), str(ruta_dxf_disco)):
+            try:
+                resultado = parsear_dxf(str(ruta_dxf_disco))
+                resultado = validar_geometria(resultado)
+                jerarquia = detectar_jerarquia(resultado.entidades)
+
+                archivo.ruta_dxf = f"{user.taller_id}/{proyecto_id}/{dxf_name}"
+                archivo.estado = EstadoArchivo.VALIDADO.value
+                archivo.entidades_total = resultado.total_entidades
+                archivo.longitud_total_mm = resultado.longitud_total_mm
+                archivo.ancho_mm = resultado.ancho_mm
+                archivo.alto_mm = resultado.alto_mm
+                archivo.entidades_cerradas = resultado.cerradas
+                archivo.entidades_abiertas = resultado.abiertas
+                archivo.problemas = {
+                    "lista": [p.to_dict() for p in resultado.problemas],
+                    "errores_criticos": resultado.errores_criticos,
+                    "puede_avanzar": resultado.puede_avanzar,
+                }
+                archivo.geometria = {
+                    "entidades": [e.to_dict() for e in resultado.entidades],
+                    "bounds": list(resultado.bounds),
+                    "jerarquia": jerarquia,
+                }
+                if resultado.puede_avanzar:
+                    archivo.estado = EstadoArchivo.LISTO.value
+            except Exception as e:
+                archivo.estado = EstadoArchivo.ERROR.value
+                archivo.problemas = {"error": f"DXF convertido pero error al procesar: {e}"}
+        else:
+            archivo.estado = EstadoArchivo.ERROR.value
+            archivo.problemas = {"error": "No se pudo convertir el archivo. Verifica que sea un archivo vectorial valido."}
     else:
-        # Para formatos que no son DXF: marcar como pendiente de conversion
-        # TODO: Implementar conversion con Inkscape headless (Fase 1.1)
         archivo.estado = EstadoArchivo.SUBIDO.value
 
     db.add(archivo)
@@ -339,6 +377,221 @@ def reparar_archivo(archivo_id: int, user: CurrentUser, db: Session = Depends(ge
         cerradas=reparado.cerradas,
         abiertas=reparado.abiertas,
     )
+
+
+# ---------------------------------------------------------------------------
+# Workspace unificado (todas las geometrias combinadas)
+# ---------------------------------------------------------------------------
+
+@router.get("/proyectos/{proyecto_id}/workspace", response_model=WorkspaceOut)
+def obtener_workspace(proyecto_id: int, user: CurrentUser, db: Session = Depends(get_db)):
+    """Retorna la geometria combinada de TODOS los archivos del proyecto."""
+    _verificar_proyecto(proyecto_id, user, db)
+
+    rows = db.execute(
+        select(Archivo)
+        .where(Archivo.proyecto_id == proyecto_id, Archivo.taller_id == user.taller_id)
+        .order_by(Archivo.creado.asc())
+    ).scalars().all()
+
+    all_entidades = []
+    all_problemas = []
+    all_jerarquia = {}
+    archivos_info = []
+    id_offset = 0
+
+    for archivo in rows:
+        if not archivo.geometria or not archivo.geometria.get("entidades"):
+            archivos_info.append({
+                "id": archivo.id,
+                "nombre": archivo.nombre_original,
+                "estado": archivo.estado,
+                "entidad_ids": [],
+            })
+            continue
+
+        entidad_ids = []
+        for ent in archivo.geometria.get("entidades", []):
+            new_id = ent["id"] + id_offset
+            ent_copy = dict(ent)
+            ent_copy["id"] = new_id
+            ent_copy["archivo_id"] = archivo.id  # Track origin file
+            all_entidades.append(ent_copy)
+            entidad_ids.append(new_id)
+
+            # Remap jerarquia
+            old_key = str(ent["id"])
+            jer = archivo.geometria.get("jerarquia", {})
+            if old_key in jer:
+                all_jerarquia[str(new_id)] = jer[old_key]
+
+        # Remap problem entity IDs
+        prob = archivo.problemas or {}
+        for p in prob.get("lista", []):
+            p_copy = dict(p)
+            p_copy["entidad_id"] = p["entidad_id"] + id_offset
+            all_problemas.append(p_copy)
+
+        # Calculate next offset (max ID from this file's entities + 1)
+        file_ids = [e["id"] for e in archivo.geometria.get("entidades", [])]
+        if file_ids:
+            id_offset += max(file_ids) + 1
+
+        archivos_info.append({
+            "id": archivo.id,
+            "nombre": archivo.nombre_original,
+            "estado": archivo.estado,
+            "entidad_ids": entidad_ids,
+        })
+
+    # Calculate combined bounds and totals
+    totales = vector_ops.recalcular_totales(all_entidades)
+    errores = sum(1 for p in all_problemas if p.get("severidad") == "critico")
+
+    return WorkspaceOut(
+        proyecto_id=proyecto_id,
+        entidades=all_entidades,
+        problemas=all_problemas,
+        bounds=totales["bounds"],
+        longitud_total_mm=totales["longitud_total_mm"],
+        ancho_mm=totales["ancho_mm"],
+        alto_mm=totales["alto_mm"],
+        total_entidades=totales["total_entidades"],
+        cerradas=totales["cerradas"],
+        abiertas=totales["abiertas"],
+        errores_criticos=errores,
+        puede_avanzar=errores == 0 and totales["total_entidades"] > 0,
+        jerarquia=all_jerarquia,
+        archivos=archivos_info,
+    )
+
+
+@router.post("/proyectos/{proyecto_id}/workspace/editar", response_model=WorkspaceOut)
+def editar_workspace(proyecto_id: int, body: EditarRequest, user: CurrentUser, db: Session = Depends(get_db)):
+    """Aplica una operacion de edicion sobre el workspace unificado."""
+    _verificar_proyecto(proyecto_id, user, db)
+
+    # Load all files
+    rows = db.execute(
+        select(Archivo)
+        .where(Archivo.proyecto_id == proyecto_id, Archivo.taller_id == user.taller_id)
+        .order_by(Archivo.creado.asc())
+    ).scalars().all()
+
+    # Build combined entity list with offset mapping
+    all_entidades = []
+    file_map = {}  # new_id -> (archivo, original_id)
+    id_offset = 0
+
+    for archivo in rows:
+        if not archivo.geometria or not archivo.geometria.get("entidades"):
+            continue
+        for ent in archivo.geometria.get("entidades", []):
+            new_id = ent["id"] + id_offset
+            ent_copy = dict(ent)
+            ent_copy["id"] = new_id
+            ent_copy["archivo_id"] = archivo.id
+            all_entidades.append(ent_copy)
+            file_map[new_id] = (archivo, ent["id"], id_offset)
+
+        file_ids = [e["id"] for e in archivo.geometria.get("entidades", [])]
+        if file_ids:
+            id_offset += max(file_ids) + 1
+
+    # Apply operation
+    operacion_fn = OPERACIONES.get(body.operacion)
+    if operacion_fn is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Operacion '{body.operacion}' no reconocida.",
+        )
+
+    try:
+        all_entidades = operacion_fn(all_entidades, body.ids, body.params)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Error: {e}")
+
+    # Write changes back to individual files
+    # Group entities by archivo_id
+    for archivo in rows:
+        if not archivo.geometria:
+            continue
+
+        file_ents = [e for e in all_entidades if e.get("archivo_id") == archivo.id]
+
+        # Restore original IDs for storage
+        offset_for_file = None
+        for new_id, (a, orig_id, off) in file_map.items():
+            if a.id == archivo.id:
+                offset_for_file = off
+                break
+
+        if offset_for_file is not None:
+            stored_ents = []
+            for e in file_ents:
+                e_store = dict(e)
+                e_store["id"] = e["id"] - offset_for_file
+                if "archivo_id" in e_store:
+                    del e_store["archivo_id"]
+                stored_ents.append(e_store)
+        else:
+            stored_ents = file_ents
+
+        # Recalc per-file totals
+        file_totales = vector_ops.recalcular_totales(stored_ents)
+
+        archivo.geometria = {
+            "entidades": stored_ents,
+            "bounds": file_totales["bounds"],
+            "jerarquia": archivo.geometria.get("jerarquia", {}),
+        }
+        archivo.entidades_total = file_totales["total_entidades"]
+        archivo.longitud_total_mm = file_totales["longitud_total_mm"]
+        archivo.ancho_mm = file_totales["ancho_mm"]
+        archivo.alto_mm = file_totales["alto_mm"]
+        archivo.entidades_cerradas = file_totales["cerradas"]
+        archivo.entidades_abiertas = file_totales["abiertas"]
+
+    # Handle entities without archivo_id (new from duplicate/multiply)
+    # Assign them to the first file that had selected entities
+    orphan_ents = [e for e in all_entidades if not e.get("archivo_id")]
+    if orphan_ents and rows:
+        # Find which file had the selected entities
+        target_archivo = None
+        for new_id in body.ids:
+            if new_id in file_map:
+                target_archivo = file_map[new_id][0]
+                break
+        if target_archivo is None:
+            target_archivo = rows[0]
+
+        existing = target_archivo.geometria.get("entidades", [])
+        max_existing = max((e["id"] for e in existing), default=0)
+        for oe in orphan_ents:
+            max_existing += 1
+            oe_store = dict(oe)
+            oe_store["id"] = max_existing
+            if "archivo_id" in oe_store:
+                del oe_store["archivo_id"]
+            existing.append(oe_store)
+
+        file_totales = vector_ops.recalcular_totales(existing)
+        target_archivo.geometria = {
+            "entidades": existing,
+            "bounds": file_totales["bounds"],
+            "jerarquia": target_archivo.geometria.get("jerarquia", {}),
+        }
+        target_archivo.entidades_total = file_totales["total_entidades"]
+        target_archivo.longitud_total_mm = file_totales["longitud_total_mm"]
+        target_archivo.ancho_mm = file_totales["ancho_mm"]
+        target_archivo.alto_mm = file_totales["alto_mm"]
+        target_archivo.entidades_cerradas = file_totales["cerradas"]
+        target_archivo.entidades_abiertas = file_totales["abiertas"]
+
+    db.commit()
+
+    # Return fresh workspace
+    return obtener_workspace(proyecto_id, user, db)
 
 
 # ---------------------------------------------------------------------------

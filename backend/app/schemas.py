@@ -102,4 +102,22 @@ class EditarRequest(BaseModel):
     params: dict = {}  # Parametros segun la operacion (dx, dy, factor, angulo, filas, columnas, ancho, alto)
 
 
+class WorkspaceOut(BaseModel):
+    """Workspace unificado: geometria de TODOS los archivos del proyecto combinados."""
+    proyecto_id: int
+    entidades: list  # All entities from all files, with unique IDs
+    problemas: list
+    bounds: list
+    longitud_total_mm: float
+    ancho_mm: float
+    alto_mm: float
+    total_entidades: int
+    cerradas: int
+    abiertas: int
+    errores_criticos: int
+    puede_avanzar: bool
+    jerarquia: dict
+    archivos: list  # [{id, nombre, estado, entidad_ids: []}]
+
+
 TokenResponse.model_rebuild()

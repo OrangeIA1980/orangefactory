@@ -121,6 +121,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ operacion, ids, params }),
     }),
+
+  // --- Workspace unificado ---
+
+  obtenerWorkspace: (proyectoId: number) =>
+    request<any>(`/proyectos/${proyectoId}/workspace`),
+
+  editarWorkspace: (proyectoId: number, operacion: string, ids: number[], params: Record<string, any> = {}) =>
+    request<any>(`/proyectos/${proyectoId}/workspace/editar`, {
+      method: "POST",
+      body: JSON.stringify({ operacion, ids, params }),
+    }),
 };
 
 export { ApiError };
