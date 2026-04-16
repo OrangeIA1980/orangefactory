@@ -131,7 +131,8 @@ export default function Dashboard() {
             {proyectos.map((p) => {
               const etapa = ETAPAS[p.estado] ?? { label: p.estado, badge: "bg-neutral-800 text-neutral-300 border-neutral-700" };
               return (
-                <div key={p.id} className="card hover:border-orange-600 transition-colors cursor-pointer">
+                <div key={p.id} className="card hover:border-orange-600 transition-colors cursor-pointer"
+                     onClick={() => navigate(`/app/proyecto/${p.id}`)}>
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <h3 className="font-semibold text-lg leading-tight">{p.nombre}</h3>
                     <span className={`text-xs font-semibold px-2 py-1 rounded-md border ${etapa.badge}`}>

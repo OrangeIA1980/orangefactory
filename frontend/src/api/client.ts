@@ -73,6 +73,48 @@ export const api = {
         body: JSON.stringify({ nombre, cliente }),
       },
     ),
+
+  obtenerProyecto: (id: number) =>
+    request<{ id: number; nombre: string; cliente: string | null; estado: string; creado: string; actualizado: string }>(
+      `/proyectos/${id}`,
+    ),
+
+  // --- Archivos (Modo Preparar) ---
+
+  subirArchivo: async (proyectoId: number, file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const headers = new Headers();
+    const token = getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    // No Content-Type — el browser lo pone con boundary
+    const res = await fetch(`${BASE}/proyectos/${proyectoId}/archivos`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try { const b = await res.json(); if (b?.detail) detail = b.detail; } catch {}
+      throw new ApiError(res.status, detail);
+    }
+    return res.json();
+  },
+
+  listarArchivos: (proyectoId: number) =>
+    request<Array<any>>(`/proyectos/${proyectoId}/archivos`),
+
+  obtenerGeometria: (archivoId: number) =>
+    request<any>(`/archivos/${archivoId}/geometria`),
+
+  validarArchivo: (archivoId: number) =>
+    request<any>(`/archivos/${archivoId}/validar`, { method: "POST" }),
+
+  repararArchivo: (archivoId: number) =>
+    request<any>(`/archivos/${archivoId}/reparar`, { method: "POST" }),
+
+  eliminarArchivo: (archivoId: number) =>
+    request<void>(`/archivos/${archivoId}`, { method: "DELETE" }),
 };
 
 export { ApiError };

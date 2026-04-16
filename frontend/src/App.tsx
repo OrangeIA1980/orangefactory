@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
+import Workspace from "./pages/Workspace";
 import { useAuth } from "./auth";
 
 function Protected({ children }: { children: JSX.Element }) {
@@ -20,6 +21,14 @@ export default function App() {
         element={
           <Protected>
             <Dashboard />
+          </Protected>
+        }
+      />
+      <Route
+        path="/app/proyecto/:proyectoId"
+        element={
+          <Protected>
+            <Workspace />
           </Protected>
         }
       />

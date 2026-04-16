@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import auth, proyectos
+from app.routers import auth, proyectos, archivos
 
 app = FastAPI(
     title="OrangeFactory API",
@@ -20,6 +20,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(proyectos.router)
+app.include_router(archivos.router)
 
 
 @app.get("/health")
