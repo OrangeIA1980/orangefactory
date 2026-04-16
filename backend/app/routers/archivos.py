@@ -7,6 +7,7 @@ Endpoints:
 - GET    /archivos/{id}/geometria          → Geometria para el canvas
 - POST   /archivos/{id}/validar            → Ejecutar validacion
 - POST   /archivos/{id}/reparar            → Auto-reparar problemas
+- POST   /archivos/{id}/editar             → Editar vectores (mover, escalar, etc.)
 - DELETE /archivos/{id}                    → Eliminar archivo
 """
 import os
@@ -20,8 +21,9 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.deps import CurrentUser
 from app.models import Proyecto, Archivo, EstadoArchivo
-from app.schemas import ArchivoOut, GeometriaOut, ValidacionOut
+from app.schemas import ArchivoOut, GeometriaOut, ValidacionOut, EditarRequest
 from app.services.dxf_service import parsear_dxf, validar_geometria, auto_reparar, detectar_jerarquia
+from app.services import vector_ops
 
 router = APIRouter(tags=["archivos"])
 
@@ -336,6 +338,98 @@ def reparar_archivo(archivo_id: int, user: CurrentUser, db: Session = Depends(ge
         entidades_total=reparado.total_entidades,
         cerradas=reparado.cerradas,
         abiertas=reparado.abiertas,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Editar vectores
+# ---------------------------------------------------------------------------
+
+OPERACIONES = {
+    "mover": lambda ents, ids, p: vector_ops.mover(ents, ids, p.get("dx", 0), p.get("dy", 0)),
+    "escalar": lambda ents, ids, p: vector_ops.escalar(ents, ids, p.get("factor", 1)),
+    "escalar_medida": lambda ents, ids, p: vector_ops.escalar_a_medida(ents, ids, ancho=p.get("ancho"), alto=p.get("alto")),
+    "rotar": lambda ents, ids, p: vector_ops.rotar(ents, ids, p.get("angulo", 0)),
+    "espejar_h": lambda ents, ids, p: vector_ops.espejar_horizontal(ents, ids),
+    "espejar_v": lambda ents, ids, p: vector_ops.espejar_vertical(ents, ids),
+    "duplicar": lambda ents, ids, p: vector_ops.duplicar(ents, ids, p.get("dx", 10), p.get("dy", 10)),
+    "multiplicar": lambda ents, ids, p: vector_ops.multiplicar_grilla(ents, ids, p.get("filas", 2), p.get("columnas", 2), p.get("dx", 50), p.get("dy", 50)),
+    "eliminar": lambda ents, ids, p: vector_ops.eliminar(ents, ids),
+    "cerrar": lambda ents, ids, p: vector_ops.cerrar_polilinea(ents, ids[0] if ids else 0),
+    "mover_origen": lambda ents, ids, p: vector_ops.mover_a_origen(ents, ids),
+}
+
+
+@router.post("/archivos/{archivo_id}/editar", response_model=GeometriaOut)
+def editar_archivo(archivo_id: int, body: EditarRequest, user: CurrentUser, db: Session = Depends(get_db)):
+    """Aplica una operacion de edicion sobre las entidades del archivo."""
+    archivo = _verificar_archivo(archivo_id, user, db)
+
+    if not archivo.geometria or not archivo.geometria.get("entidades"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No hay geometria para editar")
+
+    operacion_fn = OPERACIONES.get(body.operacion)
+    if operacion_fn is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Operacion '{body.operacion}' no reconocida. Disponibles: {', '.join(OPERACIONES.keys())}",
+        )
+
+    entidades = archivo.geometria.get("entidades", [])
+
+    # Aplicar operacion
+    try:
+        entidades = operacion_fn(entidades, body.ids, body.params)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Error en operacion: {e}")
+
+    # Recalcular totales
+    totales = vector_ops.recalcular_totales(entidades)
+
+    # Re-detectar jerarquia
+    from app.services.dxf_service import Entidad
+    entidades_obj = []
+    for ed in entidades:
+        puntos = [tuple(p) for p in ed.get("puntos", [])]
+        centro = tuple(ed["centro"]) if ed.get("centro") else None
+        bounds_t = tuple(ed["bounds"]) if ed.get("bounds") else None
+        entidades_obj.append(Entidad(
+            id=ed["id"], tipo=ed["tipo"], puntos=puntos,
+            cerrada=ed.get("cerrada", False), radio=ed.get("radio", 0),
+            centro=centro, longitud=ed.get("longitud", 0), bounds=bounds_t,
+        ))
+    jerarquia = detectar_jerarquia(entidades_obj)
+
+    # Guardar en BD
+    archivo.geometria = {
+        "entidades": entidades,
+        "bounds": totales["bounds"],
+        "jerarquia": jerarquia,
+    }
+    archivo.entidades_total = totales["total_entidades"]
+    archivo.longitud_total_mm = totales["longitud_total_mm"]
+    archivo.ancho_mm = totales["ancho_mm"]
+    archivo.alto_mm = totales["alto_mm"]
+    archivo.entidades_cerradas = totales["cerradas"]
+    archivo.entidades_abiertas = totales["abiertas"]
+
+    db.commit()
+
+    prob = archivo.problemas or {}
+    return GeometriaOut(
+        archivo_id=archivo.id,
+        entidades=entidades,
+        problemas=prob.get("lista", []),
+        bounds=totales["bounds"],
+        longitud_total_mm=totales["longitud_total_mm"],
+        ancho_mm=totales["ancho_mm"],
+        alto_mm=totales["alto_mm"],
+        total_entidades=totales["total_entidades"],
+        cerradas=totales["cerradas"],
+        abiertas=totales["abiertas"],
+        errores_criticos=prob.get("errores_criticos", 0),
+        puede_avanzar=prob.get("puede_avanzar", False),
+        jerarquia=jerarquia,
     )
 
 

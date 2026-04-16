@@ -95,4 +95,11 @@ class ValidacionOut(BaseModel):
     abiertas: int
 
 
+class EditarRequest(BaseModel):
+    """Solicitud de edicion de vectores."""
+    operacion: str  # mover, escalar, rotar, espejar_h, espejar_v, duplicar, multiplicar, eliminar, cerrar, mover_origen, escalar_medida
+    ids: list[int]  # IDs de entidades seleccionadas
+    params: dict = {}  # Parametros segun la operacion (dx, dy, factor, angulo, filas, columnas, ancho, alto)
+
+
 TokenResponse.model_rebuild()

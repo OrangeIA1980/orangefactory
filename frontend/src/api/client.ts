@@ -115,6 +115,12 @@ export const api = {
 
   eliminarArchivo: (archivoId: number) =>
     request<void>(`/archivos/${archivoId}`, { method: "DELETE" }),
+
+  editarArchivo: (archivoId: number, operacion: string, ids: number[], params: Record<string, any> = {}) =>
+    request<any>(`/archivos/${archivoId}/editar`, {
+      method: "POST",
+      body: JSON.stringify({ operacion, ids, params }),
+    }),
 };
 
 export { ApiError };

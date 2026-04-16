@@ -37,8 +37,8 @@ type Props = {
   problemas: Problema[];
   bounds: number[];
   jerarquia: Record<string, string>;
-  seleccionada: number | null;
-  onSelect: (id: number | null) => void;
+  seleccionadas: number[];
+  onSelect: (id: number | null, shift?: boolean) => void;
 };
 
 const COLORES = {
@@ -48,7 +48,7 @@ const COLORES = {
   seleccionada: "#f97316", // naranja
 };
 
-export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, seleccionada, onSelect }: Props) {
+export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, seleccionadas, onSelect }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
   const [isPanning, setIsPanning] = useState(false);
@@ -102,7 +102,7 @@ export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, sel
 
     // Entidades
     for (const e of entidades) {
-      const esSeleccionada = e.id === seleccionada;
+      const esSeleccionada = seleccionadas.includes(e.id);
       const tipo = jerarquia[String(e.id)] || "abierta";
       ctx.strokeStyle = esSeleccionada ? COLORES.seleccionada : (COLORES[tipo as keyof typeof COLORES] || COLORES.abierta);
       ctx.lineWidth = esSeleccionada ? 2.5 : 1.5;
@@ -134,7 +134,7 @@ export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, sel
       ctx.lineWidth = 1;
       ctx.stroke();
     }
-  }, [entidades, problemas, jerarquia, view, seleccionada]);
+  }, [entidades, problemas, jerarquia, view, seleccionadas]);
 
   useEffect(() => {
     draw();
@@ -196,7 +196,7 @@ export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, sel
           }
         }
       }
-      onSelect(closest);
+      onSelect(closest, e.shiftKey);
     }
   }
 

@@ -12,6 +12,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuth, clearSession } from "../auth";
 import DxfCanvas from "../components/DxfCanvas";
+import EditToolbar from "../components/EditToolbar";
 
 type Archivo = {
   id: number;
@@ -62,9 +63,10 @@ export default function Workspace() {
   const [archivos, setArchivos] = useState<Archivo[]>([]);
   const [archivoActivo, setArchivoActivo] = useState<Archivo | null>(null);
   const [geometria, setGeometria] = useState<Geometria | null>(null);
-  const [seleccionada, setSeleccionada] = useState<number | null>(null);
+  const [seleccionadas, setSeleccionadas] = useState<number[]>([]);
   const [uploading, setUploading] = useState(false);
   const [reparando, setReparando] = useState(false);
+  const [editando, setEditando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -98,7 +100,7 @@ export default function Workspace() {
   // Seleccionar archivo y cargar geometria
   async function seleccionarArchivo(archivo: Archivo) {
     setArchivoActivo(archivo);
-    setSeleccionada(null);
+    setSeleccionadas([]);
     if (archivo.estado !== "subido" && archivo.estado !== "error" && archivo.estado !== "convirtiendo") {
       try {
         const geo = await api.obtenerGeometria(archivo.id);
@@ -164,9 +166,50 @@ export default function Workspace() {
       if (archivoActivo?.id === archivoId) {
         setArchivoActivo(null);
         setGeometria(null);
+        setSeleccionadas([]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error eliminando");
+    }
+  }
+
+  // Seleccion con soporte shift (multi)
+  function handleSelect(id: number | null, shift?: boolean) {
+    if (id === null) {
+      if (!shift) setSeleccionadas([]);
+      return;
+    }
+    setSeleccionadas((prev) => {
+      if (shift) {
+        return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      }
+      return prev.length === 1 && prev[0] === id ? [] : [id];
+    });
+  }
+
+  // Editar vectores
+  async function handleOperar(operacion: string, params: Record<string, any>) {
+    if (!archivoActivo || seleccionadas.length === 0) return;
+    setEditando(true);
+    setError(null);
+    try {
+      const geo = await api.editarArchivo(archivoActivo.id, operacion, seleccionadas, params);
+      setGeometria(geo);
+      // Actualizar archivo en la lista con nuevos totales
+      setArchivos((prev) => prev.map((a) =>
+        a.id === archivoActivo.id
+          ? { ...a, entidades_total: geo.total_entidades, longitud_total_mm: geo.longitud_total_mm, ancho_mm: geo.ancho_mm, alto_mm: geo.alto_mm, entidades_cerradas: geo.cerradas, entidades_abiertas: geo.abiertas }
+          : a
+      ));
+      // Si la operacion fue eliminar, limpiar seleccion
+      if (operacion === "eliminar") {
+        setSeleccionadas([]);
+      }
+      // Si duplicar o multiplicar, seleccionadas originales siguen validas
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error editando");
+    } finally {
+      setEditando(false);
     }
   }
 
@@ -195,6 +238,18 @@ export default function Workspace() {
         </div>
       </header>
 
+      {/* Toolbar */}
+      {geometria && (
+        <EditToolbar
+          seleccionadas={seleccionadas}
+          totalEntidades={geometria.total_entidades}
+          onSelectAll={() => setSeleccionadas(geometria.entidades.map((e: any) => e.id))}
+          onSelectNone={() => setSeleccionadas([])}
+          onOperar={handleOperar}
+          disabled={editando}
+        />
+      )}
+
       {/* Main area */}
       <div className="flex-1 flex overflow-hidden">
         {/* Canvas area */}
@@ -205,8 +260,8 @@ export default function Workspace() {
               problemas={geometria.problemas}
               bounds={geometria.bounds}
               jerarquia={geometria.jerarquia}
-              seleccionada={seleccionada}
-              onSelect={setSeleccionada}
+              seleccionadas={seleccionadas}
+              onSelect={handleSelect}
             />
           ) : (
             <div className="h-full flex items-center justify-center">
@@ -234,7 +289,7 @@ export default function Workspace() {
               <span>Abiertas: {geometria.abiertas}</span>
               <span>Dimension: {geometria.ancho_mm.toFixed(1)} x {geometria.alto_mm.toFixed(1)} mm</span>
               <span>Long. total: {(geometria.longitud_total_mm / 1000).toFixed(2)} m</span>
-              {seleccionada !== null && <span className="text-orange-400">Entidad #{seleccionada} seleccionada</span>}
+              {seleccionadas.length > 0 && <span className="text-orange-400">{seleccionadas.length} entidad(es) seleccionada(s)</span>}
             </div>
           )}
         </div>
@@ -311,7 +366,7 @@ export default function Workspace() {
                     className={`p-2 rounded text-xs cursor-pointer hover:bg-neutral-700 ${
                       p.severidad === "critico" ? "bg-red-950/50 border border-red-900" : "bg-yellow-950/50 border border-yellow-900"
                     }`}
-                    onClick={() => setSeleccionada(p.entidad_id)}
+                    onClick={() => setSeleccionadas([p.entidad_id])}
                   >
                     <div className="flex items-center gap-1.5">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${p.severidad === "critico" ? "bg-red-500" : "bg-yellow-500"}`} />
