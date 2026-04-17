@@ -370,7 +370,7 @@ export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, sel
     }
   }
 
-  function handleMouseUp(e: React.MouseEvent) {
+  function handleMouseUp(_e: React.MouseEvent) {
     if (dragState.type === "pan") {
       setDragState({ type: "none" });
       setCursor(spaceDown ? "grab" : "crosshair");
