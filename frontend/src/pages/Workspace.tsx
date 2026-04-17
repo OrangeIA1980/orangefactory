@@ -16,7 +16,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
-import { useAuth, clearSession } from "../auth";
+import { useAuth, clearSession, getToken } from "../auth";
 import DxfCanvas from "../components/DxfCanvas";
 import EditToolbar from "../components/EditToolbar";
 
@@ -280,6 +280,44 @@ export default function Workspace() {
     }
   }
 
+  // Ctrl+drag duplicate
+  async function handleCtrlDragDuplicate(ids: number[], dx: number, dy: number) {
+    if (!workspace) return;
+    setEditando(true);
+    setError(null);
+    try {
+      const ws = await api.editarWorkspace(pid, "duplicar", ids, { dx, dy });
+      setWorkspace(ws);
+      pushHistory(ws, seleccionadas);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error duplicando");
+    } finally {
+      setEditando(false);
+    }
+  }
+
+  // Descargar DXF combinado
+  async function handleDescargar() {
+    try {
+      const token = getToken();
+      const res = await fetch(`/api/proyectos/${pid}/exportar`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${proyecto?.nombre || "proyecto"}.dxf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error descargando DXF");
+    }
+  }
+
   // Editar vectores (toolbar)
   async function handleOperar(operacion: string, params: Record<string, any>) {
     if (!workspace || seleccionadas.length === 0) return;
@@ -332,6 +370,12 @@ export default function Workspace() {
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13 8H5a3 3 0 000 6h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><path d="M11 5l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
             </button>
           </div>
+          {/* Guardar DXF */}
+          {hasEntidades && (
+            <button onClick={handleDescargar} className="px-3 py-1.5 rounded-md bg-green-700 hover:bg-green-600 text-white text-xs font-medium" title="Descargar DXF combinado">
+              Guardar DXF
+            </button>
+          )}
           <span className="text-xs text-neutral-500">{usuario?.nombre}</span>
           <button onClick={salir} className="text-xs text-neutral-500 hover:text-white">Salir</button>
         </div>
@@ -363,6 +407,7 @@ export default function Workspace() {
               onSelect={handleSelect}
               onWindowSelect={handleWindowSelect}
               onDragMove={handleDragMove}
+              onCtrlDragDuplicate={handleCtrlDragDuplicate}
             />
           ) : (
             <div className="h-full flex items-center justify-center">

@@ -44,6 +44,7 @@ type Props = {
   onSelect: (id: number | null, shift?: boolean) => void;
   onWindowSelect: (ids: number[]) => void;
   onDragMove: (ids: number[], dx: number, dy: number) => void;
+  onCtrlDragDuplicate?: (ids: number[], dx: number, dy: number) => void;
 };
 
 const COLORES: Record<string, string> = {
@@ -56,10 +57,10 @@ const COLORES: Record<string, string> = {
 type DragState =
   | { type: "none" }
   | { type: "pan"; startX: number; startY: number; viewX: number; viewY: number }
-  | { type: "drag"; startWorldX: number; startWorldY: number; lastWorldX: number; lastWorldY: number }
+  | { type: "drag"; startWorldX: number; startWorldY: number; lastWorldX: number; lastWorldY: number; ctrlKey: boolean }
   | { type: "window"; startX: number; startY: number; endX: number; endY: number };
 
-export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, seleccionadas, onSelect, onWindowSelect, onDragMove }: Props) {
+export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, seleccionadas, onSelect, onWindowSelect, onDragMove, onCtrlDragDuplicate }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
   const [dragState, setDragState] = useState<DragState>({ type: "none" });
@@ -179,6 +180,31 @@ export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, sel
         ctx.rotate(-Math.PI / 2);
         ctx.fillText(`${h.toFixed(1)} mm`, 0, 0);
         ctx.restore();
+      }
+    }
+
+    // Ghost preview during Ctrl+drag (duplicate)
+    if (dragState.type === "drag" && dragState.ctrlKey) {
+      const ddx = dragState.lastWorldX - dragState.startWorldX;
+      const ddy = dragState.lastWorldY - dragState.startWorldY;
+      if (Math.abs(ddx) > 0.01 || Math.abs(ddy) > 0.01) {
+        ctx.globalAlpha = 0.4;
+        const selEnts = entidades.filter(e => seleccionadas.includes(e.id));
+        for (const e of selEnts) {
+          ctx.strokeStyle = "#22c55e";
+          ctx.lineWidth = 1.5;
+          if (e.puntos.length < 2) continue;
+          ctx.beginPath();
+          const first = _toScreen(e.puntos[0][0] + ddx, e.puntos[0][1] + ddy, vx, vy, scale);
+          ctx.moveTo(first.x, first.y);
+          for (let i = 1; i < e.puntos.length; i++) {
+            const p = _toScreen(e.puntos[i][0] + ddx, e.puntos[i][1] + ddy, vx, vy, scale);
+            ctx.lineTo(p.x, p.y);
+          }
+          if (e.cerrada) ctx.closePath();
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
       }
     }
 
@@ -307,12 +333,12 @@ export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, sel
 
     if (e.button !== 0) return;
 
-    // Left click on selected entity: start drag
+    // Left click on selected entity: start drag (Ctrl = duplicate)
     if (seleccionadas.length > 0 && isPointOnSelectedEntity(mx, my)) {
       const v = viewRef.current;
       const wp = _toWorld(mx, my, v.x, v.y, v.scale);
-      setDragState({ type: "drag", startWorldX: wp.x, startWorldY: wp.y, lastWorldX: wp.x, lastWorldY: wp.y });
-      setCursor("move");
+      setDragState({ type: "drag", startWorldX: wp.x, startWorldY: wp.y, lastWorldX: wp.x, lastWorldY: wp.y, ctrlKey: e.ctrlKey || e.metaKey });
+      setCursor(e.ctrlKey || e.metaKey ? "copy" : "move");
       return;
     }
 
@@ -395,7 +421,11 @@ export default function DxfCanvas({ entidades, problemas, bounds, jerarquia, sel
       const dx = dragState.lastWorldX - dragState.startWorldX;
       const dy = dragState.lastWorldY - dragState.startWorldY;
       if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
-        onDragMove(seleccionadas, dx, dy);
+        if (dragState.ctrlKey && onCtrlDragDuplicate) {
+          onCtrlDragDuplicate(seleccionadas, dx, dy);
+        } else {
+          onDragMove(seleccionadas, dx, dy);
+        }
       }
       setDragState({ type: "none" });
       setCursor("crosshair");
